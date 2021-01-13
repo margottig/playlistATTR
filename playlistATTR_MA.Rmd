@@ -1,0 +1,431 @@
+---
+title: "ML Predictive Model On Wheter Like/Dislike Music From A Spotify Playlist"
+author: "Marcelo Argotti"
+date: "6/20/2020"
+output: 
+  html_document:
+    #theme: cosmo 
+    toc: true 
+    toc_depth: 6
+    #toc_float: true
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## 1 INTRODUCTION
+
+In this report, an attempt to build machine learning algorithms that can predict the musical taste (like/dislike) of a user based on the tracks present in his Spotify playlist will be made. The following analysis also explores the audio features of the songs and extracted from the Spotify Web API.
+These available features include attributes such as: acousticness, danceability, duration_ms, energy, instrumentalness, key, liveness, loudness, mode, speechiness, tempo, time signature and valence. For more details see [**Spotify Audio Features**.](https://developer.spotify.com/documentation/web-api/reference/tracks/get-audio-features/)
+
+This project is relevant to music lovers. Not only will it help to determine how accurate is the musical preference of a listener, it could also help understand which audio features are likely to become more pleasant than others. By the end of the project, an ensemble will be built from the best models which can predict a target (like or dislike). The most successful algorithms were LDA and Logistic Regression.
+
+
+## 2 DATA EXPLORATION
+
+**Data Source:** The data for this study was acquired from Kaggle’s repository, maintained by GeorgeMcIntire. This dataset collects 2017 songs with audio attributes from the Spotify’s API as well as complementary information such as artist name, song title and target. Each song is labeled “1” meaning ‘like it’ and “0” meaning ‘don’t like’. For more information click [**here**](https://www.kaggle.com/geomack/spotifyclassification)
+
+The dataset was splited into a training set and a validation set. The training set was used to develop the algorithm, while the validation set was used to evaluate the predictions. Confusion Matrix was used to evaluate the results.
+
+### 2.1 Packages and libraries 
+```{r loading-libs, message=FALSE}
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", 
+                                         repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", 
+                                          repos = "http://cran.us.r-project.org")
+if(!require(ggcorrplot)) install.packages("ggcorrplot", 
+                                          repos = "http://cran.us.r-project.org")
+if(!require(rattle)) install.packages("rattle", 
+                                      repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(rpart.plot)) install.packages("rpart.plot", 
+                                          repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(e1071)) install.packages("e1071", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(class)) install.packages("class", 
+                                     repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", 
+                                            repos = "http://cran.us.r-project.org")
+if(!require(MASS)) install.packages("MASS", 
+                                    repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", 
+                                         repos="http://cran.us.r-project.org")
+
+
+
+```
+
+### 2.2 Preparing data
+For practical issues I made a copy of the original dataset into my GitHub repo. The data set and the attached info file will both be downloaded.
+```{r loading-data, message=FALSE}
+# SpotifyClassification 2017 dataset:
+  # https://github.com/margottig/spotyATR/archive/master.zip
+
+temp <- tempfile()
+download.file("https://github.com/margottig/spotyATR/archive/master.zip", temp)
+
+#read downloaded data
+data <- read.csv(unz(temp, "spotyATR-master/data.csv"))
+unlink(temp)
+
+```
+
+## 3 EXPLORATORY ANALYSIS
+In order to get insights into the dataset, some exploratory analysis was made.
+```{r ExploratoryAnalysis, message=FALSE}
+
+str(data)
+
+```
+
+The dataset has 17 variables and 2017 observations. Although some are categorical in nature, all variables are stored as numeric/integers except the *song_title* and *artist* variables which are stored as characters.
+As we can observe from the information displayed above, there are multiple variables that are presented in different magnitudes or scales. Further on, in order to get better consistency in the data analysis we will scale these values.  
+
+```{r ExploratoryAnalysis2, message=FALSE}
+#Some summary statistics
+summary(data)
+
+#check missing values
+colSums(is.na(data)) 
+```
+No NAs were found
+
+### 3.1 Explore target variable
+
+```{r TargetExploration, message=FALSE}
+#Let see if there is repeated data. Count unique values in the X variable (song_id)
+length(unique(data$X)) 
+
+#Let explore how audio features correlate between them or else see which of the features
+#correlate the best with the target variable (liked/disliked song)
+corr <- round(cor(data[,2:15]),6)
+ggcorrplot(corr)
+
+```
+It can be observed that the variables **loudness-energy** and **valence-danceability** are correlated to some extent compared to the other variables.
+
+### 3.2 Data Wrangling
+
+```{r DataWrangling, message=FALSE}
+
+#Transform categorical variables into factors in order to represent data more
+# efficiently. Before converting this variables, lets make a copy of the data.
+playlist <- data
+playlist$target <- factor(playlist$target, levels = c(0,1), labels = c("dislike", "like"))
+
+data$target <- factor(data$target, levels = c(0,1), labels = c("dislike", "like"))
+data$mode <- factor(data$mode, levels=c(0,1), labels=c("minor", "major"))
+data$key <- factor(playlist$key)
+data$duration_ms <- playlist$duration_ms/60000
+#It is know from pitch class integer notation that each number from the key variable
+# are relative to a specific letter in elementary music theory. So now we convert 
+#the numerical keys to the actual musical keys
+
+levels(data$key)[1] <- "C"
+levels(data$key)[2] <- "C#"
+levels(data$key)[3] <- "D"
+levels(data$key)[4] <- "D#"
+levels(data$key)[5] <- "E"
+levels(data$key)[6] <- "F"
+levels(data$key)[7] <- "F#"
+levels(data$key)[8] <- "G"
+levels(data$key)[9] <- "G#"
+levels(data$key)[10] <- "A"
+levels(data$key)[11] <- "A#"
+levels(data$key)[12] <- "B"
+
+#convert the duration_ms units to minutes
+playlist$duration_ms <- playlist$duration_ms/60000
+
+# identify which class applies for each variable
+sapply(playlist, class) 
+
+# At the moment we will not be using character variables, so lets skipped them 
+#from our dataset including the song_id variable 'X'
+
+playlist$X <- NULL
+playlist$song_title <- NULL
+playlist$artist <- NULL
+
+```
+
+
+## 4 VISUALIZATION
+The distribution of **like** and **dislike** target values is as follows:
+```{r TargetDistribution, fig.height= 3, message=FALSE}
+playlist %>% ggplot(aes(target)) + geom_bar(width = 0.4,fill="steelblue")
+```
+
+
+```{r correlation, message=FALSE}
+# Let's see how likely is the musical taste among key notation
+KeyNotation <- c("C","C#","D", "D#", "E", "F", "G", "G#", "A","A#", "B")
+Taste <- c("like", "dislike")
+data %>% filter(key%in%KeyNotation & target%in%Taste) %>%
+  ggplot(aes(energy, loudness, col = target)) +
+  geom_point() + facet_wrap(~key) 
+
+```
+
+```{r correlation2, fig.height=3, message=FALSE}
+#Let see which key notes are most predominant in data
+ggplot(data) + geom_bar(aes(key),width = 0.4,fill="steelblue")
+```
+
+From the previous scatterplot it is difficult to reveal important characteristics of the data distribution.It will be useful to visualize some variables through density plots. 
+
+```{r DensityPlots, out.width="94%" ,message=FALSE}
+# energy density
+plot_energy <- data %>% ggplot(aes(energy, fill = target)) + 
+  geom_density(alpha=0.4) + facet_grid(mode~.)
+# loudness density
+plot_loudness <- data %>% ggplot(aes(loudness, fill = target)) +
+  geom_density(alpha=0.4) + facet_grid(mode~.)
+# danceability density
+plot_danceability <- data %>% ggplot(aes(danceability, fill = target)) +
+  geom_density(alpha=0.4) + facet_grid(mode~.)
+# acousticness density
+plot_acousticness <- data %>% ggplot(aes(acousticness, fill = target)) +
+  geom_density(alpha=0.4) +  facet_grid(mode~.)
+#valence density
+plot_valence <- data %>% ggplot(aes(valence, fill = target)) +
+  geom_density(alpha=0.4) +  facet_grid(mode~.)
+# speechiness density
+plot_speechiness <- data %>% ggplot(aes(speechiness, fill = target)) +
+  geom_density(alpha=0.4) +  facet_grid(mode~.)
+#liveness density
+plot_liveness <- data %>% ggplot(aes(liveness, fill = target)) +
+  geom_density(alpha=0.4) +  facet_grid(mode~.)
+# tempo density
+plot_tempo <- data %>% ggplot(aes(tempo, fill = target)) +
+  geom_density(alpha=0.4) +  facet_grid(mode~.)
+#combine plots
+grid.arrange(plot_energy, plot_danceability, plot_valence, plot_acousticness)
+grid.arrange(plot_loudness, plot_tempo, plot_speechiness, plot_liveness)
+
+```
+
+
+## 5 MODELING APPROACH
+In this section, we will be applying different Machine Learning algorithms on 
+the training set and then validate against the test set. We’ll work with seven different methods to compare predictions:
+
+ * Decision Tree Model
+ * Generalized Linear Model GLM
+ * K-nearest neighbors KNN
+ * Support Vector Machine SVM
+ * Naive Bayes Classifier
+ * Random Forest Classifier
+ * Linear Discriminant Analysis LDA
+
+
+### 5.1 Creating partitions of training and test dataset
+The data set was divided into two parts: train (80%) and test (20%) dataset.
+
+```{r DataPartition, message=FALSE}
+#Create Data partition into test set and training set 80% and 20%
+
+set.seed(1)
+test_index <- createDataPartition(y = playlist$target, times = 1, p = 0.80, 
+                                  list = FALSE)
+Train <- playlist[-test_index,]
+Test <- playlist[test_index,]
+
+#scale data
+ScaledTrain <- Train
+ScaledTest <- Test
+
+ScaledTrain[, -14]=scale(ScaledTrain[, -14])
+ScaledTest[, -14]=scale(ScaledTest[, -14])
+
+```
+
+### 5.2 Decision Tree Model
+
+Applying the Decision Tree model:
+
+```{r DecisionTree, message=FALSE}
+
+DecisionT <- rpart(target~., data=ScaledTrain)
+prp(DecisionT, type=1,extra=4, main= "Probabilities per class") 
+
+dt_pred <- predict(DecisionT, ScaledTest, type= "class")
+cm_decisiontree = confusionMatrix(dt_pred, ScaledTest$target, positive= "like")
+cm_decisiontree
+
+```
+
+### 5.3 Generalized Linear Model GLM
+
+Applying the Logistic Regression model:
+
+```{r GLM, message=FALSE}
+LogicRegression = glm(formula = target ~ ., family = binomial,data = ScaledTrain)
+# Predicting the Test set results
+lr_pred = predict(LogicRegression, type = 'response', newdata = ScaledTest)
+y_pred = ifelse(lr_pred > 0.5, "like", "dislike") %>% factor
+# Making the Confusion Matrix
+cm_glm = confusionMatrix(y_pred, ScaledTest$target, positive = "like")
+cm_glm
+
+```
+
+### 5.4 K-nearest neighbors KNN
+
+Applying the kNN model with k = 5:
+
+```{r KNN, message=FALSE}
+# Fitting K-NN to the Training set and Predicting the Test set results
+Knearest = knn(train = ScaledTrain[, -14],
+             test = ScaledTest[, -14],
+             cl = ScaledTrain[, 14],
+             k = 5,
+             prob = TRUE)
+
+cm_knn = confusionMatrix(Knearest, ScaledTest$target, positive = "like")
+cm_knn
+
+```
+
+### 5.5 Support Vector Machine SVM
+Applying SVM model:
+```{r SVM, message=FALSE}
+# Fitting SVM to the Training set
+SVM = svm(formula = target ~ .,
+                     data = ScaledTrain,
+                     type = 'C-classification',
+                     kernel = 'linear')
+
+# Predicting the Test set results
+svm_pred = predict(SVM, newdata = ScaledTest[-14])
+
+# Making the Confusion Matrix
+cm_svm = confusionMatrix(svm_pred, ScaledTest$target, positive = "like")
+cm_svm
+
+```
+
+
+### 5.6 Naive Bayes Classifier
+Applying the Naive Bayes model:
+```{r NBC, message=FALSE}
+NBay = naiveBayes(x = ScaledTrain[-14], y = ScaledTrain$target)
+# Predicting the Test set results
+nbay_pred = predict(NBay, newdata = ScaledTest[-14])
+# Making the Confusion Matrix
+cm_naivebayes = confusionMatrix(nbay_pred, ScaledTest$target, positive = "like")
+cm_naivebayes
+
+```
+
+
+### 5.7 Random Forest Classifier
+Applying the Random Forest model, with number of trees limit set to 777:
+```{r RF, message=FALSE}
+# Fitting Random Forest Classification to the Training set
+RndForest = randomForest(x = ScaledTrain[-14],
+                                       y = ScaledTrain$target,
+                                       ntree = 777)
+
+# Predicting the Test set results
+rndforest_pred = predict(RndForest, newdata = ScaledTest[-14])
+
+# Making the Confusion Matrix
+cm_randomforest = confusionMatrix(rndforest_pred, ScaledTest$target, positive = "like")
+cm_randomforest
+
+```
+
+### 5.8 Linear Discriminant Analysis LDA
+Applying the Linear Discriminant Analysis (LDA) model:
+```{r LDA, message=FALSE}
+train_set = ScaledTrain
+test_set = ScaledTest
+# Applying LDA
+LDA = lda(formula = target ~ ., data = train_set)
+train_set = as.data.frame(predict(LDA, train_set))
+train_set = train_set[c(4, 1)]
+test_set = as.data.frame(predict(LDA, test_set))
+test_set = test_set[c(4, 1)]
+
+# Fitting SVM to the Training set
+# install.packages('e1071')
+classifier_lda = svm(formula = class ~ .,data = train_set,
+                     type = 'C-classification', kernel = 'linear')
+
+# Predicting the Test set results
+lda_pred = predict(classifier_lda, newdata = test_set[-2])
+
+# Making the Confusion Matrix
+cm_lda = confusionMatrix(lda_pred, test_set$class, positive = "like")
+cm_lda
+
+
+```
+
+## 6 RESULTS AND DISCUSSION
+
+```{r RESULTS, out.width="50%" ,message=FALSE}
+
+# Comparison of confusion matrix of used models
+confusionmatrix_list <- list(DT = cm_decisiontree,GLM = cm_glm, KNN = cm_knn,
+                             SVM = cm_svm, NV = cm_naivebayes,
+                             RF= cm_randomforest,LDA = cm_lda)   
+# confusionmatrix_list
+
+confusionmatrix_list_results <- sapply(confusionmatrix_list, function(x) x$byClass)
+confusionmatrix_list_results %>% knitr::kable()
+```
+
+
+### 6.1 Conclusions 
+
+ * Based on the Balanced Accuracy of the models used to predict whether the user like or
+ dislike a particular song, the LDA algorithm present better results. Nevertheless, 
+ due to too many similar values among variables it could be possible that the model is
+ overestimating the likeability of certain songs.
+
+ * Data provide interesting insights on spotify's audio features which can be used 
+ for song composition and promotion.
+ 
+ * Data does not reveal a clearly patron or tendency in the musical taste of the user.
+ Many songs have very similar audio features and still they could be target as a liked 
+ or disliked song. 
+	
+ * Audio features from the present dataset dont define the audio or sound experience
+ of a track. There is a lot more that creates impression to a particular user such as
+ lyrics, rhythm, current environment, among others.
+
+
+## 7 REFERENCES
+
+ * Irizarry, Rafael A. (2020, June 06). Introduction to Data Science. Retrieved from
+ https://rafalab.github.io/dsbook/ 
+
+ * GeorgeMcIntire. (2017, August 04). Spotify Song Attributes. Retrieved from
+ https://www.kaggle.com/geomack/spotifyclassification
+
+ * Get Audio Features for a track n.d., Retrieved from
+ https://developer.spotify.com/documentation/web-api/reference/tracks/get-audio-features/
+
+ * (Pitch Class 2020) Retrieved from https://en.wikipedia.org/wiki/Pitch_class
+
+ * Schuller, B. W. (2013). Intelligent audio analysis. Berlin Heidelberg: Springer.
+
+ * Trafton, A. (2016, July 13). Why we like the music we do. Retrieved from
+ http://news.mit.edu/2016/music-tastes-cultural-not-hardwired-brain-0713
+
+ * Xie Y., Allaire J. & Grolemund G. (2020, April 26) R Markdown: The Definitive Guide.
+ Retrieved from https://bookdown.org/yihui/rmarkdown/
+
+
